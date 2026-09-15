@@ -114,11 +114,30 @@ numba.
 The remaining cost is spread evenly across bond activation, labelling, cluster statistics
 and the energy sum, so there is no single hot spot left to attack.
 
-**Error bars.** Each observable carries `error`, the standard error across disorder
-realizations, and `thermal_error`, the mean within-realization error. In a disordered
-system the sample-to-sample fluctuation usually dominates, so `error` is the one to quote.
-With a single realization the disorder error is undefined and the thermal error is
-reported in its place.
+**Error bars.** Each observable carries `error`, a jackknife estimate over disorder
+realizations, and `thermal_error`, the mean within-realization error across bins. In a
+disordered system the sample-to-sample fluctuation usually dominates, so `error` is the one
+to quote. With a single realization the disorder error is undefined and the thermal error
+is reported in its place.
+
+**Estimators.** Variances and moment ratios — specific heat, susceptibility, Binder
+cumulant — are *not* evaluated inside bins and then averaged. A short window of a
+correlated series cannot resolve fluctuations longer than itself, and a ratio of
+small-sample averages is biased; measured here, shrinking the bins from 1000 to 10 sweeps
+moved the Binder cumulant from 0.076 to 0.278 and the specific heat from 0.55 to 0.36,
+while genuinely linear observables did not move at all. Instead, primitive moments are
+accumulated over the whole run of each realization, the disorder average is taken, and the
+derived observables are formed last. Bins contribute only a thermal error, never a central
+value, so the bin count cannot affect a result — `tests/test_physics.py` asserts exactly
+that.
+
+**Choosing statistics.** At a critical point disordered systems are generally not
+self-averaging, so sample-to-sample scatter does not shrink with lattice size and the error
+floor is set by the number of realizations alone. For a fixed budget, many short runs beat
+few long ones once each is equilibrated: at 512,000 total sweeps, 1024 realizations × 500
+sweeps gave roughly three times smaller errors than 64 × 8000 on every observable. Run each
+sample just long enough to equilibrate and decorrelate, then spend everything else on more
+disorder.
 
 ## Validation
 

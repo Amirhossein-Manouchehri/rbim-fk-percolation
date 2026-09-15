@@ -35,7 +35,12 @@ from rbim.clusters import (
     spans_along,
 )
 from rbim.swendsen_wang import SweepResult, sw_sweep
-from rbim.simulation import run_single_realization, run_temperature_scan
+from rbim.simulation import (
+    RealizationResult,
+    derive_observables,
+    run_single_realization,
+    run_temperature_scan,
+)
 
 __version__ = "0.1.0"
 
@@ -55,6 +60,8 @@ __all__ = [
     "spans_along",
     "SweepResult",
     "sw_sweep",
+    "RealizationResult",
+    "derive_observables",
     "run_single_realization",
     "run_temperature_scan",
 ]
