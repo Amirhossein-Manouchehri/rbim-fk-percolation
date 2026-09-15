@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from rbim.clusters import activate_bonds, cluster_statistics, label_clusters, wraps_along
+from rbim.clusters import activate_bonds, cluster_statistics, label_and_wrap
 from rbim.lattice import Lattice
 
 __all__ = ["SweepResult", "energy", "magnetization", "random_spins", "sw_sweep"]
@@ -98,8 +98,8 @@ def sw_sweep(
         When false the update is performed without computing any observables,
         which is what thermalisation sweeps want.
     measure_percolation:
-        When false the wrapping tests are skipped.  They require two extra
-        cluster labellings and dominate the cost of a measured sweep.
+        When false the wrapping flags are not reported.  They now come free
+        with the cluster labelling, so this only affects what is returned.
 
     Returns
     -------
@@ -107,7 +107,7 @@ def sw_sweep(
         ``None`` when ``measure`` is false.
     """
     active = activate_bonds(spins, lattice, J, beta, rng)
-    n_clusters, labels = label_clusters(active, lattice)
+    n_clusters, labels, wrapped_x, wrapped_y = label_and_wrap(active, lattice)
 
     flip = rng.random(n_clusters) < 0.5
     spins[flip[labels]] *= -1
@@ -126,8 +126,8 @@ def sw_sweep(
         second_abs_magnetization = abs(float(magnetizations[second]))
 
     if measure_percolation:
-        wx: Optional[bool] = wraps_along(active, lattice, "x")
-        wy: Optional[bool] = wraps_along(active, lattice, "y")
+        wx: Optional[bool] = bool(wrapped_x)
+        wy: Optional[bool] = bool(wrapped_y)
     else:
         wx = wy = None
 

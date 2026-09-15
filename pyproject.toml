@@ -15,6 +15,10 @@ keywords = ["Ising model", "spin glass", "percolation", "Monte Carlo", "Swendsen
 dependencies = [
     "numpy>=1.22",
     "scipy>=1.8",
+    # The cluster-labelling kernel is JIT compiled.  Without numba the same code
+    # runs as plain Python and gives identical results, but far too slowly for
+    # production runs.
+    "numba>=0.57",
 ]
 
 [project.optional-dependencies]

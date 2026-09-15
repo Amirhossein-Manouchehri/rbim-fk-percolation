@@ -30,6 +30,7 @@ __all__ = [
     "bond_activation_probability",
     "activate_bonds",
     "label_clusters",
+    "label_and_wrap",
     "cluster_statistics",
     "wraps_along",
     "spans_along",
@@ -120,24 +121,42 @@ def cluster_statistics(
 def wraps_along(active: np.ndarray, lattice: Lattice, axis: str) -> bool:
     """Test whether some cluster winds around the torus along ``axis``.
 
-    The boundary-closing bonds along ``axis`` are removed, the resulting
-    cylinder is labelled, and a winding cluster is detected when an active
-    removed bond has both endpoints in the same cylinder cluster: such a bond
-    closes a path that already runs the full length of the lattice.
+    Delegates to :func:`label_and_wrap`, which examines every fundamental cycle
+    of the active-bond graph and is exact.  An earlier version of this function
+    used the cheaper test of deleting the boundary-closing bonds and asking
+    whether any deleted bond rejoined a cluster to itself; that only detects
+    cycles crossing the boundary once and under-reports wrapping for large,
+    multiply connected clusters.  It is kept out of the codebase deliberately.
 
     Note that wrapping along ``x`` and wrapping along ``y`` are distinct
     observables.  They share a transition point but their universal values at
     criticality differ, so the choice must be stated when comparing against
     published crossing values.
     """
-    wrap_mask = lattice.wrap_mask(axis)
-    closing = active & wrap_mask
-    if not np.any(closing):
-        return False
+    _, _, wrapped_x, wrapped_y = label_and_wrap(active, lattice)
+    if axis == "x":
+        return bool(wrapped_x)
+    if axis == "y":
+        return bool(wrapped_y)
+    raise ValueError(f"axis must be 'x' or 'y', got {axis!r}")
 
-    _, cylinder_labels = label_clusters(active & ~wrap_mask, lattice)
-    ends = lattice.bonds[closing]
-    return bool(np.any(cylinder_labels[ends[:, 0]] == cylinder_labels[ends[:, 1]]))
+
+def label_and_wrap(active: np.ndarray, lattice: Lattice) -> Tuple[int, np.ndarray, bool, bool]:
+    """Label the clusters and test wrapping along both axes in a single pass.
+
+    Traverses the active bonds once, using a union-find that carries the
+    displacement of every site to the root of its tree, so that the winding of
+    each fundamental cycle falls out while the clusters are being built.  This
+    replaced three separate connected-component searches, which used to account
+    for about three quarters of the cost of a measured sweep.
+
+    Returns
+    -------
+    (n_clusters, labels, wraps_x, wraps_y)
+    """
+    from rbim._unionfind import label_and_wrap_unionfind
+
+    return label_and_wrap_unionfind(active, lattice)
 
 
 def spans_along(active: np.ndarray, lattice: Lattice, axis: str) -> bool:

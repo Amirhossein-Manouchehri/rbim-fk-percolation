@@ -49,12 +49,20 @@ class Lattice:
     wraps_y:
         Boolean mask of shape ``(2 * N,)``, true for the vertical bonds that
         close the periodic boundary in the ``y`` direction.
+    bond_dx, bond_dy:
+        Lattice displacement carried by each bond in *unwrapped* coordinates:
+        ``(1, 0)`` for every horizontal bond and ``(0, 1)`` for every vertical
+        one, including the bonds that close the boundary.  Summing these around
+        a closed loop gives zero for a contractible loop and a multiple of ``L``
+        for one that winds, which is how wrapping is detected.
     """
 
     L: int
     bonds: np.ndarray
     wraps_x: np.ndarray
     wraps_y: np.ndarray
+    bond_dx: np.ndarray
+    bond_dy: np.ndarray
 
     @property
     def n_sites(self) -> int:
@@ -112,7 +120,19 @@ def build_lattice(L: int) -> Lattice:
     wraps_x[0::2] = x == L - 1
     wraps_y[1::2] = y == L - 1
 
-    return Lattice(L=L, bonds=bonds, wraps_x=wraps_x, wraps_y=wraps_y)
+    bond_dx = np.zeros(n_bonds, dtype=np.int64)
+    bond_dy = np.zeros(n_bonds, dtype=np.int64)
+    bond_dx[0::2] = 1
+    bond_dy[1::2] = 1
+
+    return Lattice(
+        L=L,
+        bonds=bonds,
+        wraps_x=wraps_x,
+        wraps_y=wraps_y,
+        bond_dx=bond_dx,
+        bond_dy=bond_dy,
+    )
 
 
 def couplings_from_disorder(J_h: np.ndarray, J_v: np.ndarray) -> np.ndarray:

@@ -82,11 +82,37 @@ convention in the literature.
 | `second_size_fraction`, `cluster_density_gap` | second-largest cluster and `(S₁ - S₂)/N` |
 | `wrap_x`, `wrap_y`, `wrap_any` | probability that a cluster winds around the torus |
 
-**Wrapping versus spanning.** These are different observables: `wraps_along` removes the
-boundary-closing bonds along an axis and asks whether an active removed bond rejoins a
-cluster to itself, while `spans_along` asks whether a cluster touches both open faces.
-They share a transition point but not the universal value at criticality, so results must
-state which one was used. Wrapping along `x` and along `y` are likewise distinct.
+**Wrapping versus spanning.** These are different observables: wrapping asks whether a
+cluster winds around the torus, spanning asks whether it touches both faces of an opened
+direction. They share a transition point but not the universal value at criticality, so
+results must state which one was used. Wrapping along `x` and along `y` are likewise
+distinct.
+
+Wrapping is detected exactly, by tracking each site's displacement to the root of its
+union-find tree and testing the winding of every fundamental cycle. The cheaper test —
+delete the boundary-closing bonds along an axis, then ask whether any deleted bond rejoins
+a cluster to itself — is **wrong**, and is deliberately not used here: it sees only cycles
+that cross the boundary once, so a cluster winding via several crossings is missed. It
+disagrees with a brute-force calculation on roughly 0.25% of configurations, concentrated
+at low temperature where clusters are large and multiply connected, and it biases the
+measured `T_c` low by about a factor of two in the residual. `tests/test_wrapping.py` pins
+the implementation to an independent spanning-forest oracle.
+
+## Performance
+
+Cluster labelling used to dominate: one connected-component search for the labels and one
+more for each wrapping direction, about three quarters of a measured sweep. A single
+union-find pass now returns the labels and both wrapping flags together, JIT compiled with
+numba.
+
+| | before | after | |
+|---|---|---|---|
+| measured sweep, L=32 | 0.909 ms | 0.133 ms | 6.8× |
+| measured sweep, L=64 | 1.940 ms | 0.424 ms | 4.6× |
+| end-to-end scan (L=16, 10 T, 8 realizations, 2000 sweeps) | 47.5 s | 5.2 s | 9.1× |
+
+The remaining cost is spread evenly across bond activation, labelling, cluster statistics
+and the energy sum, so there is no single hot spot left to attack.
 
 **Error bars.** Each observable carries `error`, the standard error across disorder
 realizations, and `thermal_error`, the mean within-realization error. In a disordered
@@ -110,10 +136,10 @@ extracts `T_c` twice over, from a magnetic observable and from a geometric one:
 | crossing | L=8 vs 16 | L=8 vs 24 | L=16 vs 24 |
 |---|---|---|---|
 | Binder cumulant | 2.2491 | 2.2596 | 2.2627 |
-| FK wrapping probability | 2.2623 | 2.2657 | 2.2674 |
+| FK wrapping probability | 2.2645 | 2.2670 | 2.2683 |
 
 Both drift monotonically toward the exact value as the sizes grow, which is the expected
-finite-size behaviour; the largest pair reaches `2.2674`, within 0.08% of exact. The two
+finite-size behaviour; the largest pair reaches `2.2683`, within 0.04% of exact. The two
 estimates also agree with each other to `0.008`, which is the Coniglio-Klein identity: at
 zero disorder the percolation transition and the magnetic transition are the same
 transition. Its breakdown at `p > 0` is what the rest of the project measures, so this
