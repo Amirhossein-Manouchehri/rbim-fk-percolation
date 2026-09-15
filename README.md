@@ -96,11 +96,33 @@ reported in its place.
 
 ## Validation
 
-The test suite checks the simulation against exactly known results for the pure model:
+### Recovering the exact critical temperature
+
+At `p = 0` the model reduces to the ferromagnetic square-lattice Ising model, whose critical
+point is known exactly: `T_c = 2/ln(1+√2) = 2.269185`. Running
+
+```bash
+python scripts/validate_pure_ising.py --sizes 8 16 24 --sweeps 8000
+```
+
+extracts `T_c` twice over, from a magnetic observable and from a geometric one:
+
+| crossing | L=8 vs 16 | L=8 vs 24 | L=16 vs 24 |
+|---|---|---|---|
+| Binder cumulant | 2.2491 | 2.2596 | 2.2627 |
+| FK wrapping probability | 2.2623 | 2.2657 | 2.2674 |
+
+Both drift monotonically toward the exact value as the sizes grow, which is the expected
+finite-size behaviour; the largest pair reaches `2.2674`, within 0.08% of exact. The two
+estimates also agree with each other to `0.008`, which is the Coniglio-Klein identity: at
+zero disorder the percolation transition and the magnetic transition are the same
+transition. Its breakdown at `p > 0` is what the rest of the project measures, so this
+agreement is the baseline against which that breakdown is defined.
+
+### Test suite
 
 - the spontaneous magnetization at `T = 2.0` against Onsager's `(1 - sinh⁻⁴(2/T))^{1/8}`;
 - the Coniglio-Klein identity `m = P_∞` at `p = 0`;
-- the exact critical temperature `T_c = 2/ln(1+√2)`;
 - reproducibility under a fixed seed, and independence across seeds;
 - geometric invariants: bond counts, lattice degree, frustrated-plaquette density against
   `4p(1-p)[(1-p)² + p²]`, and the fact that only satisfied bonds are ever activated.
