@@ -37,7 +37,7 @@ import numpy as np
 
 from rbim.disorder import generate_disorder
 from rbim.lattice import build_lattice, couplings_from_disorder
-from rbim.swendsen_wang import random_spins, sw_sweep
+from rbim.swendsen_wang import initial_spins, sw_sweep
 
 __all__ = [
     "OBSERVABLES",
@@ -155,6 +155,7 @@ def run_single_realization(
     n_bins: int = 10,
     seed: Optional[int | np.random.SeedSequence] = None,
     measure_percolation: bool = True,
+    start: str = "hot",
 ) -> RealizationResult:
     """Simulate one disorder realization at one temperature.
 
@@ -177,6 +178,11 @@ def run_single_realization(
     measure_percolation:
         Whether to report the wrapping observables.  They are now free, since
         the cluster labelling produces them.
+    start:
+        ``"hot"`` for a random initial configuration or ``"cold"`` for a fully
+        aligned one.  Below the ordering transition the two approach
+        equilibrium from opposite sides, so running both and comparing is the
+        way to establish that a result is equilibrated.
     """
     if n_bins < 1:
         raise ValueError(f"n_bins must be positive, got {n_bins}")
@@ -192,7 +198,7 @@ def run_single_realization(
     beta = 1.0 / temperature
     n_sites = lattice.n_sites
 
-    spins = random_spins(n_sites, rng)
+    spins = initial_spins(n_sites, rng, start)
     for _ in range(n_therm):
         sw_sweep(spins, lattice, J, beta, rng, measure=False)
 
@@ -238,7 +244,7 @@ def run_single_realization(
 
 def _worker(task: tuple) -> RealizationResult:
     """Process-pool entry point; arguments are packed to keep pickling simple."""
-    L, J, temperature, n_sweeps, n_therm, n_bins, seed_seq, measure_percolation = task
+    L, J, temperature, n_sweeps, n_therm, n_bins, seed_seq, measure_percolation, start = task
     return run_single_realization(
         L,
         J,
@@ -248,6 +254,7 @@ def _worker(task: tuple) -> RealizationResult:
         n_bins=n_bins,
         seed=seed_seq,
         measure_percolation=measure_percolation,
+        start=start,
     )
 
 
@@ -338,6 +345,7 @@ def run_temperature_scan(
     seed: int = 0,
     n_workers: Optional[int] = None,
     measure_percolation: bool = True,
+    start: str = "hot",
     disorder: Optional[Iterable[tuple]] = None,
 ) -> Dict[str, object]:
     """Scan temperatures, averaging over disorder realizations.
@@ -381,7 +389,7 @@ def run_temperature_scan(
         (t, J) for t in temperatures for J in couplings
     ):
         tasks.append(
-            (L, J, temperature, n_sweeps, n_therm, n_bins, children[k], measure_percolation)
+            (L, J, temperature, n_sweeps, n_therm, n_bins, children[k], measure_percolation, start)
         )
 
     if n_workers == 1:
@@ -417,6 +425,7 @@ def run_temperature_scan(
         "n_bins": n_bins,
         "seed": seed,
         "measure_percolation": measure_percolation,
+        "start": start,
         "algorithm": "Swendsen-Wang cluster update on satisfied bonds",
         "estimator": (
             "primitive moments accumulated over the full run of each realization; "

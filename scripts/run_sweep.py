@@ -45,6 +45,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0, help="master seed")
     parser.add_argument("--workers", type=int, default=None, help="process pool size (1 runs serially)")
     parser.add_argument("--no-percolation", action="store_true", help="skip the wrapping observables")
+    parser.add_argument("--start", choices=["hot", "cold"], default="hot",
+                        help="initial configuration; run both and compare to test equilibration")
     parser.add_argument(
         "--disorder-glob",
         type=str,
@@ -78,6 +80,7 @@ def main() -> None:
         seed=args.seed,
         n_workers=args.workers,
         measure_percolation=not args.no_percolation,
+        start=args.start,
         disorder=disorder,
     )
     elapsed = time.time() - start

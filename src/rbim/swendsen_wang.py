@@ -10,7 +10,15 @@ import numpy as np
 from rbim.clusters import activate_bonds, cluster_statistics, label_and_wrap
 from rbim.lattice import Lattice
 
-__all__ = ["SweepResult", "energy", "magnetization", "random_spins", "sw_sweep"]
+__all__ = [
+    "SweepResult",
+    "energy",
+    "magnetization",
+    "random_spins",
+    "aligned_spins",
+    "initial_spins",
+    "sw_sweep",
+]
 
 
 @dataclass(frozen=True)
@@ -48,6 +56,26 @@ class SweepResult:
 def random_spins(n_sites: int, rng: np.random.Generator) -> np.ndarray:
     """Return a random ``+-1`` spin configuration of length ``n_sites``."""
     return (rng.integers(0, 2, size=n_sites, dtype=np.int64) * 2 - 1)
+
+
+def aligned_spins(n_sites: int) -> np.ndarray:
+    """Return the fully aligned configuration, for a cold start."""
+    return np.ones(n_sites, dtype=np.int64)
+
+
+def initial_spins(n_sites: int, rng: np.random.Generator, start: str = "hot") -> np.ndarray:
+    """Return a starting configuration.
+
+    A hot start is random, a cold start fully aligned.  Running both and
+    comparing is the standard equilibration test: below the transition the two
+    approach equilibrium from opposite sides, so results that disagree are not
+    equilibrated no matter how small the statistical error looks.
+    """
+    if start == "hot":
+        return random_spins(n_sites, rng)
+    if start == "cold":
+        return aligned_spins(n_sites)
+    raise ValueError(f"start must be 'hot' or 'cold', got {start!r}")
 
 
 def energy(spins: np.ndarray, lattice: Lattice, J: np.ndarray) -> float:
