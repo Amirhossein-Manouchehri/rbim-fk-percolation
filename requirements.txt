@@ -1,0 +1,6 @@
+numpy>=1.22
+scipy>=1.8
+
+# Development and analysis extras
+pytest>=7.0
+matplotlib>=3.5

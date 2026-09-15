@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rbim-fk-percolation"
+version = "0.1.0"
+description = "Fortuin-Kasteleyn cluster percolation in the two-dimensional +-J random-bond Ising model"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Amirhossein (Ario) Manouchehri" }]
+keywords = ["Ising model", "spin glass", "percolation", "Monte Carlo", "Swendsen-Wang"]
+
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+plots = ["matplotlib>=3.5"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: physics-validation tests that run a real simulation (deselect with '-m \"not slow\"')",
+]
