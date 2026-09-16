@@ -20,13 +20,13 @@ htmlcov/
 .vscode/
 .DS_Store
 
-# Simulation output (regenerate with the scripts; do not commit)
+# Bulk, regenerable output: disorder realizations, figures, pickles.
 data/
-results/
-*.npz
 *.pkl
 *.png
 *.pdf
 
-# Keep small reference disorder realizations if explicitly added with `git add -f`
-!tests/data/*.npz
+# Scan summaries under results/ are deliberately tracked.  They are aggregated
+# observables rather than configurations -- tens of kilobytes each -- so keeping
+# them in the repository makes the analysis reproducible from a clone alone.
+# If a future run starts writing per-realization data, revisit this.
