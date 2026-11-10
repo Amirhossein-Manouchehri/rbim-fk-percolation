@@ -1,6 +1,10 @@
 numpy>=1.22
 scipy>=1.8
 
+# Compiles the sweep kernels.  The code runs without it, but far slower, so it
+# is required in practice for production runs.
+numba>=0.57
+
 # Development and analysis extras
 pytest>=7.0
 matplotlib>=3.5

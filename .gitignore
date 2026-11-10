@@ -40,3 +40,8 @@ data/
 # observables rather than configurations -- tens of kilobytes each -- so keeping
 # them in the repository makes the analysis reproducible from a clone alone.
 # If a future run starts writing per-realization data, revisit this.
+
+# Per-realization moments and checkpoints from production runs: large, kept
+# on the machine that produced them.
+*.real.npz
+*.ckpt/

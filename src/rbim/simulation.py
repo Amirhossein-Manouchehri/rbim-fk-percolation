@@ -27,8 +27,10 @@ as a diagnostic for checking that the run length was adequate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -48,6 +50,7 @@ __all__ = [
     "run_temperature_scan",
     "save_results",
     "load_results",
+    "remove_checkpoints",
 ]
 
 #: Quantities accumulated directly from the sweep time series.  Everything the
@@ -68,7 +71,22 @@ PRIMITIVES = (
     "wrap_x",
     "wrap_y",
     "wrap_any",
+    "second_abs_mag",    # <|M_2|>, second-largest cluster
+    "largest_mag_sq",    # <M_C^2>
+    "cluster_mag_sq_sum",  # <sum_C M_C^2>, equal to <M^2> in expectation
+    "active_bonds",      # <number of active FK bonds>
+    # The last two are not time-series averages: they are squares of the
+    # full-run means of one realization, needed to form the connected
+    # (within-sample) susceptibility and specific heat after disorder averaging.
+    "energy_mean_sq",          # <E>^2
+    "abs_magnetization_mean_sq",  # <|M|>^2
 )
+
+#: Primitives that are squares of run means rather than means of a series.
+_MEAN_SQUARE_PRIMITIVES = {
+    "energy_mean_sq": "energy",
+    "abs_magnetization_mean_sq": "abs_magnetization",
+}
 
 #: Physical observables reported by :func:`run_temperature_scan`.
 OBSERVABLES = (
@@ -88,6 +106,16 @@ OBSERVABLES = (
     "wrap_x",
     "wrap_y",
     "wrap_any",
+    # Added after the first production scans.  Files written before then do not
+    # contain these keys; everything above is unchanged in name and definition.
+    "magnetization_sq",
+    "second_abs_magnetization",
+    "largest_magnetization_sq",
+    "cluster_magnetization_sq_sum",
+    "largest_cluster_m2_share",
+    "fk_bond_density",
+    "susceptibility_connected",
+    "specific_heat_connected",
 )
 
 
@@ -108,11 +136,25 @@ class RealizationResult:
 def derive_observables(primitives: Dict[str, float], temperature: float, n_sites: int) -> Dict[str, float]:
     """Form the physical observables from disorder-averaged primitive moments.
 
-    Conventions, which differ between authors and so are fixed explicitly here:
+    Square brackets denote the disorder average and angle brackets the thermal
+    average.  Conventions, which differ between authors, are fixed here:
 
-    * ``specific_heat`` uses the thermal variance within a sample,
-      ``[<E^2> - <E>^2] / (T^2 N)``;
-    * ``susceptibility`` likewise uses ``[<M^2> - <|M|>^2] / (T N)``;
+    * ``specific_heat`` is ``([<E^2>] - [<E>]^2) / (T^2 N)`` and
+      ``susceptibility`` is ``([<M^2>] - [<|M|>]^2) / (T N)``.  Both subtract
+      the square of a *disorder-averaged* mean, so they contain the
+      sample-to-sample variance of ``<E>`` and ``<|M|>`` on top of the thermal
+      fluctuation.  They are kept under these names, unchanged, so that files
+      from earlier runs remain comparable.
+    * ``specific_heat_connected`` and ``susceptibility_connected`` subtract
+      the square inside the disorder average, ``[<E^2> - <E>^2] / (T^2 N)``
+      and ``[<M^2> - <|M|>^2] / (T N)``.  These are the within-sample thermal
+      quantities.
+    * ``magnetization_sq`` is ``[<M^2>]`` itself (extensive).
+    * ``largest_magnetization_sq`` is ``[<M_C^2>]`` for the largest cluster and
+      ``cluster_magnetization_sq_sum`` is ``[<sum_C M_C^2>]``, whose
+      expectation equals ``[<M^2>]`` because clusters flip independently.
+      ``largest_cluster_m2_share`` is the ratio of the two.
+    * ``fk_bond_density`` is the fraction of bonds that are active.
     * ``binder`` is built from the disorder-averaged moments,
       ``1 - [<m^4>] / (3 [<m^2>]^2)``, rather than by averaging the Binder
       cumulants of individual samples.
@@ -142,6 +184,24 @@ def derive_observables(primitives: Dict[str, float], temperature: float, n_sites
         "wrap_x": primitives["wrap_x"],
         "wrap_y": primitives["wrap_y"],
         "wrap_any": primitives["wrap_any"],
+        "magnetization_sq": primitives["magnetization_sq"],
+        "second_abs_magnetization": primitives["second_abs_mag"],
+        "largest_magnetization_sq": primitives["largest_mag_sq"],
+        "cluster_magnetization_sq_sum": primitives["cluster_mag_sq_sum"],
+        "largest_cluster_m2_share": (
+            primitives["largest_mag_sq"] / primitives["cluster_mag_sq_sum"]
+            if primitives["cluster_mag_sq_sum"] > 0.0
+            else 0.0
+        ),
+        "fk_bond_density": primitives["active_bonds"] / (2 * N),
+        "susceptibility_connected": (
+            primitives["magnetization_sq"] - primitives["abs_magnetization_mean_sq"]
+        )
+        / (temperature * N),
+        "specific_heat_connected": (
+            primitives["energy_sq"] - primitives["energy_mean_sq"]
+        )
+        / (temperature**2 * N),
     }
 
 
@@ -203,7 +263,7 @@ def run_single_realization(
         sw_sweep(spins, lattice, J, beta, rng, measure=False)
 
     total = n_bins * sweeps_per_bin
-    series = {name: np.empty(total) for name in PRIMITIVES}
+    series = {name: np.empty(total) for name in PRIMITIVES if name not in _MEAN_SQUARE_PRIMITIVES}
 
     for index in range(total):
         result = sw_sweep(
@@ -226,6 +286,10 @@ def run_single_realization(
             result.largest_abs_magnetization / largest if largest > 0 else 0.0
         )
         series["n_clusters"][index] = result.n_clusters
+        series["second_abs_mag"][index] = result.second_abs_magnetization
+        series["largest_mag_sq"][index] = result.largest_abs_magnetization**2
+        series["cluster_mag_sq_sum"][index] = result.cluster_magnetization_sq_sum
+        series["active_bonds"][index] = result.n_active_bonds
         if measure_percolation:
             series["wrap_x"][index] = float(result.wraps_x)
             series["wrap_y"][index] = float(result.wraps_y)
@@ -239,6 +303,9 @@ def run_single_realization(
     bin_primitives = {
         name: values.reshape(n_bins, sweeps_per_bin).mean(axis=1) for name, values in series.items()
     }
+    for name, source in _MEAN_SQUARE_PRIMITIVES.items():
+        primitives[name] = primitives[source] ** 2
+        bin_primitives[name] = bin_primitives[source] ** 2
     return RealizationResult(primitives=primitives, bin_primitives=bin_primitives)
 
 
@@ -347,6 +414,8 @@ def run_temperature_scan(
     measure_percolation: bool = True,
     start: str = "hot",
     disorder: Optional[Iterable[tuple]] = None,
+    checkpoint_dir: Optional[str] = None,
+    progress: bool = False,
 ) -> Dict[str, object]:
     """Scan temperatures, averaging over disorder realizations.
 
@@ -354,11 +423,26 @@ def run_temperature_scan(
     the curves and sharpens crossing determinations considerably compared with
     drawing fresh disorder at each point.
 
+    Parameters
+    ----------
+    checkpoint_dir:
+        When given, the per-realization results of each temperature are written
+        there as soon as that temperature finishes, and a later call with the
+        same arguments reuses them instead of recomputing.  A checkpoint written
+        with different run parameters or different disorder is refused rather
+        than mixed in.  Seeds are assigned per (temperature, realization), so a
+        resumed run gives exactly the result of an uninterrupted one.
+    progress:
+        Print one line per finished temperature.
+
     Returns
     -------
     dict
         ``{"temperatures", "observables": {name: {"value", "error",
-        "thermal_error"}}, "metadata"}``.
+        "thermal_error"}}, "metadata", "per_realization"}``, where
+        ``per_realization`` holds ``names`` (the entries of
+        :data:`PRIMITIVES`) and ``values`` of shape
+        ``(n_temperatures, n_realizations, n_primitives)``.
     """
     temperatures = list(temperatures)
     if n_therm is None:
@@ -392,11 +476,57 @@ def run_temperature_scan(
             (L, J, temperature, n_sweeps, n_therm, n_bins, children[k], measure_percolation, start)
         )
 
-    if n_workers == 1:
-        raw = [_worker(task) for task in tasks]
-    else:
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
-            raw = list(pool.map(_worker, tasks))
+    fingerprint = _run_fingerprint(
+        L, p, n_realizations_actual, n_sweeps, n_therm, n_bins, seed,
+        measure_percolation, start, couplings,
+    )
+    if checkpoint_dir is not None:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+    raw: List[Optional[RealizationResult]] = [None] * n_tasks
+    pending: List[int] = []
+    for t_index, temperature in enumerate(temperatures):
+        block = None
+        if checkpoint_dir is not None:
+            block = _load_checkpoint(
+                _checkpoint_path(checkpoint_dir, t_index), fingerprint, temperature
+            )
+        if block is None:
+            pending.append(t_index)
+        else:
+            raw[t_index * n_realizations_actual : (t_index + 1) * n_realizations_actual] = block
+            if progress:
+                print(f"  T={temperature:.6g}: loaded from checkpoint", flush=True)
+
+    def _run_block(t_index: int, mapper) -> None:
+        lo = t_index * n_realizations_actual
+        hi = lo + n_realizations_actual
+        block = list(mapper(tasks[lo:hi]))
+        raw[lo:hi] = block
+        if checkpoint_dir is not None:
+            _save_checkpoint(
+                _checkpoint_path(checkpoint_dir, t_index), block, fingerprint, temperatures[t_index]
+            )
+        if progress:
+            print(
+                f"  T={temperatures[t_index]:.6g}: done "
+                f"({len(temperatures) - pending.index(t_index) - 1} temperature(s) left)",
+                flush=True,
+            )
+
+    if pending:
+        if n_workers == 1:
+            for t_index in pending:
+                _run_block(t_index, lambda block_tasks: map(_worker, block_tasks))
+        else:
+            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+                workers = n_workers or os.cpu_count() or 1
+                chunksize = max(1, n_realizations_actual // (8 * workers))
+                for t_index in pending:
+                    _run_block(
+                        t_index,
+                        lambda block_tasks: pool.map(_worker, block_tasks, chunksize=chunksize),
+                    )
 
     n_sites = L * L
     results: Dict[str, Dict[str, np.ndarray]] = {
@@ -433,19 +563,120 @@ def run_temperature_scan(
             "uncertainties by jackknife over realizations"
         ),
         "binder_convention": "1 - [<m^4>] / (3 [<m^2>]^2), from disorder-averaged moments",
-        "specific_heat_convention": "[<E^2> - <E>^2] / (T^2 N)",
-        "susceptibility_convention": "[<M^2> - <|M|>^2] / (T N)",
+        "specific_heat_convention": (
+            "([<E^2>] - [<E>]^2) / (T^2 N); includes sample-to-sample variance of <E>"
+        ),
+        "susceptibility_convention": (
+            "([<M^2>] - [<|M|>]^2) / (T N); includes sample-to-sample variance of <|M|>"
+        ),
+        "specific_heat_connected_convention": "[<E^2> - <E>^2] / (T^2 N)",
+        "susceptibility_connected_convention": "[<M^2> - <|M|>^2] / (T N)",
+        "format_version": 2,
         "error_convention": (
             "error = jackknife over disorder realizations; "
             "thermal_error = mean within-realization standard error across bins"
         ),
     }
 
-    return {"temperatures": np.asarray(temperatures), "observables": results, "metadata": metadata}
+    per_realization = np.array(
+        [
+            [[r.primitives[name] for name in PRIMITIVES] for r in raw[
+                t_index * n_realizations_actual : (t_index + 1) * n_realizations_actual
+            ]]
+            for t_index in range(len(temperatures))
+        ],
+        dtype=float,
+    )
+
+    return {
+        "temperatures": np.asarray(temperatures),
+        "observables": results,
+        "metadata": metadata,
+        "per_realization": {"names": list(PRIMITIVES), "values": per_realization},
+    }
 
 
-def save_results(path: str, results: Dict[str, object]) -> None:
-    """Write a scan produced by :func:`run_temperature_scan` to a ``.npz`` file."""
+def _run_fingerprint(
+    L, p, n_realizations, n_sweeps, n_therm, n_bins, seed, measure_percolation, start, couplings
+) -> str:
+    """Identify a run by everything that determines its per-realization results."""
+    digest = hashlib.sha256()
+    for J in couplings:
+        digest.update(np.ascontiguousarray(J).tobytes())
+    return json.dumps(
+        {
+            "L": int(L),
+            "p": float(p),
+            "n_realizations": int(n_realizations),
+            "n_sweeps": int(n_sweeps),
+            "n_therm": int(n_therm),
+            "n_bins": int(n_bins),
+            "seed": int(seed),
+            "measure_percolation": bool(measure_percolation),
+            "start": str(start),
+            "disorder_sha256": digest.hexdigest(),
+            "primitives": list(PRIMITIVES),
+        },
+        sort_keys=True,
+    )
+
+
+def _checkpoint_path(checkpoint_dir: str, t_index: int) -> str:
+    return os.path.join(checkpoint_dir, f"T{t_index:04d}.npz")
+
+
+def _save_checkpoint(
+    path: str, block: Sequence[RealizationResult], fingerprint: str, temperature: float
+) -> None:
+    """Write one temperature's per-realization results, atomically."""
+    primitives = np.array([[r.primitives[name] for name in PRIMITIVES] for r in block], dtype=float)
+    bins = np.array([[r.bin_primitives[name] for name in PRIMITIVES] for r in block], dtype=float)
+    temporary = path + ".tmp.npz"
+    np.savez_compressed(
+        temporary,
+        primitives=primitives,
+        bin_primitives=bins,
+        temperature=np.asarray(float(temperature)),
+        fingerprint=np.asarray(fingerprint),
+    )
+    os.replace(temporary, path)
+
+
+def _load_checkpoint(
+    path: str, fingerprint: str, temperature: float
+) -> Optional[List[RealizationResult]]:
+    """Read one temperature's checkpoint, or return ``None`` if there is none."""
+    if not os.path.exists(path):
+        return None
+    with np.load(path, allow_pickle=False) as data:
+        if str(data["fingerprint"]) != fingerprint or float(data["temperature"]) != float(temperature):
+            raise ValueError(
+                f"checkpoint {path} was written by a run with different parameters, "
+                "temperatures or disorder; remove the checkpoint directory or choose another."
+            )
+        primitives = data["primitives"]
+        bins = data["bin_primitives"]
+    return [
+        RealizationResult(
+            primitives={name: float(primitives[r, k]) for k, name in enumerate(PRIMITIVES)},
+            bin_primitives={name: bins[r, k].copy() for k, name in enumerate(PRIMITIVES)},
+        )
+        for r in range(primitives.shape[0])
+    ]
+
+
+def save_results(
+    path: str, results: Dict[str, object], *, per_realization_path: Optional[str] = None
+) -> None:
+    """Write a scan produced by :func:`run_temperature_scan` to a ``.npz`` file.
+
+    The summary file holds the disorder-averaged observables and is small.
+    When ``per_realization_path`` is given, the full-run moments of every
+    realization at every temperature are written there as well, so that the
+    analysis can be redone (different estimators, bootstrap, subsets) without
+    rerunning the simulation.  That file is tens of megabytes for a production
+    scan and is not meant to be tracked in git.
+    """
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
 
@@ -456,6 +687,25 @@ def save_results(path: str, results: Dict[str, object]) -> None:
     flat["metadata_json"] = np.asarray(json.dumps(results["metadata"]))
 
     np.savez_compressed(path, **flat)
+
+    if per_realization_path is not None:
+        per_realization = results.get("per_realization")
+        if per_realization is None:
+            raise ValueError("results carry no per-realization data to save")
+        os.makedirs(os.path.dirname(os.path.abspath(per_realization_path)), exist_ok=True)
+        np.savez_compressed(
+            per_realization_path,
+            temperatures=results["temperatures"],
+            names=np.asarray(per_realization["names"]),
+            values=per_realization["values"],
+            metadata_json=np.asarray(json.dumps(results["metadata"])),
+        )
+
+
+def remove_checkpoints(checkpoint_dir: str) -> None:
+    """Delete a checkpoint directory once its scan has been saved."""
+    if os.path.isdir(checkpoint_dir):
+        shutil.rmtree(checkpoint_dir)
 
 
 def load_results(path: str) -> Dict[str, object]:

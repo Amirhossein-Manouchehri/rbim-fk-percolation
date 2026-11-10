@@ -16,8 +16,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from rbim._unionfind import NUMBA_AVAILABLE
 from rbim.disorder import load_disorder
-from rbim.simulation import run_temperature_scan, save_results
+from rbim.simulation import remove_checkpoints, run_temperature_scan, save_results
 
 
 def _load_disorder_directory(pattern: str, n_realizations: int) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -54,7 +55,30 @@ def main() -> None:
         help="optional glob of stored .npz realizations to use instead of generating new ones",
     )
     parser.add_argument("--out", type=str, required=True, help="output .npz path")
+    parser.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="do not write per-temperature checkpoints (default: <out>.ckpt/, resumed automatically)",
+    )
+    parser.add_argument(
+        "--keep-checkpoints",
+        action="store_true",
+        help="keep the checkpoint directory after the scan has been saved",
+    )
+    parser.add_argument(
+        "--save-realizations",
+        action="store_true",
+        help="also write per-realization moments to <out stem>.real.npz",
+    )
     args = parser.parse_args()
+
+    checkpoint_dir = None if args.no_checkpoint else args.out + ".ckpt"
+
+    if not NUMBA_AVAILABLE:
+        print(
+            "warning: numba is not installed, so the sweep runs as plain Python and is "
+            "far slower.  Install it with `pip install numba` before production runs."
+        )
 
     temperatures = np.linspace(args.t_min, args.t_max, args.n_temps)
 
@@ -82,11 +106,21 @@ def main() -> None:
         measure_percolation=not args.no_percolation,
         start=args.start,
         disorder=disorder,
+        checkpoint_dir=checkpoint_dir,
+        progress=True,
     )
     elapsed = time.time() - start
 
-    save_results(args.out, results)
+    per_realization_path = None
+    if args.save_realizations:
+        stem = args.out[:-4] if args.out.endswith(".npz") else args.out
+        per_realization_path = stem + ".real.npz"
+    save_results(args.out, results, per_realization_path=per_realization_path)
     print(f"finished in {elapsed:.1f} s; wrote {args.out}")
+    if per_realization_path is not None:
+        print(f"wrote {per_realization_path}")
+    if checkpoint_dir is not None and not args.keep_checkpoints:
+        remove_checkpoints(checkpoint_dir)
 
     if args.realizations == 1:
         print(

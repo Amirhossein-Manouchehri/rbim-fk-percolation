@@ -7,7 +7,13 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from rbim.clusters import activate_bonds, cluster_statistics, label_and_wrap
+from rbim._kernel import activate_label_wrap, flip_and_measure
+from rbim.clusters import (
+    activate_bonds,
+    bond_activation_probability,
+    cluster_statistics,
+    label_and_wrap,
+)
 from rbim.lattice import Lattice
 
 __all__ = [
@@ -18,6 +24,7 @@ __all__ = [
     "aligned_spins",
     "initial_spins",
     "sw_sweep",
+    "sw_sweep_reference",
 ]
 
 
@@ -40,6 +47,14 @@ class SweepResult:
     wraps_x, wraps_y:
         Whether a cluster winds around the torus along each axis.  ``None``
         when percolation measurement was switched off.
+    cluster_magnetization_sq_sum:
+        Sum over all clusters of the squared cluster magnetization.  Because
+        clusters flip independently, its average equals ``<M^2>`` exactly, so
+        the ratio ``largest_abs_magnetization**2 / cluster_magnetization_sq_sum``
+        is the share of ``<M^2>`` carried by the largest cluster.
+    n_active_bonds:
+        Number of active Fortuin-Kasteleyn bonds in the configuration the
+        clusters were built from.
     """
 
     energy: float
@@ -51,6 +66,8 @@ class SweepResult:
     second_abs_magnetization: float
     wraps_x: Optional[bool]
     wraps_y: Optional[bool]
+    cluster_magnetization_sq_sum: float = float("nan")
+    n_active_bonds: int = -1
 
 
 def random_spins(n_sites: int, rng: np.random.Generator) -> np.ndarray:
@@ -111,6 +128,91 @@ def sw_sweep(
     measure_percolation: bool = True,
 ) -> Optional[SweepResult]:
     """Perform one Swendsen-Wang update of ``spins`` in place.
+
+    Satisfied bonds are activated with probability ``1 - exp(-2 beta)``, the
+    active-bond graph is decomposed into clusters, and each cluster is flipped
+    independently with probability one half.
+
+    The work is done by two compiled kernels (:mod:`rbim._kernel`).  The random
+    numbers are drawn here, in the same order as in
+    :func:`sw_sweep_reference`, so the two functions give identical results
+    from identical generator states.
+
+    Parameters
+    ----------
+    spins:
+        Spin configuration, modified in place.
+    lattice, J, beta, rng:
+        Geometry, couplings, inverse temperature and random generator.
+    measure:
+        When false the update is performed without computing any observables,
+        which is what thermalisation sweeps want.
+    measure_percolation:
+        When false the wrapping flags are not reported.
+
+    Returns
+    -------
+    SweepResult or None
+        ``None`` when ``measure`` is false.
+    """
+    L = lattice.L
+    p_add = bond_activation_probability(beta)
+    n_clusters, labels, wrapped_x, wrapped_y, n_active = activate_label_wrap(
+        spins, J, rng.random(lattice.n_bonds), p_add, L
+    )
+    sizes, magnetizations, total_energy, total_magnetization, sum_sq = flip_and_measure(
+        spins, labels, rng.random(n_clusters), J, L, n_clusters, measure
+    )
+
+    if not measure:
+        return None
+
+    first, second = _two_largest(sizes)
+
+    if second is None:
+        second_size = 0
+        second_abs_magnetization = 0.0
+    else:
+        second_size = int(sizes[second])
+        second_abs_magnetization = abs(float(magnetizations[second]))
+
+    if measure_percolation:
+        wx: Optional[bool] = bool(wrapped_x)
+        wy: Optional[bool] = bool(wrapped_y)
+    else:
+        wx = wy = None
+
+    return SweepResult(
+        energy=float(total_energy),
+        magnetization=float(total_magnetization),
+        n_clusters=int(n_clusters),
+        largest_size=int(sizes[first]),
+        largest_abs_magnetization=abs(float(magnetizations[first])),
+        second_size=second_size,
+        second_abs_magnetization=second_abs_magnetization,
+        wraps_x=wx,
+        wraps_y=wy,
+        cluster_magnetization_sq_sum=float(sum_sq),
+        n_active_bonds=int(n_active),
+    )
+
+
+def sw_sweep_reference(
+    spins: np.ndarray,
+    lattice: Lattice,
+    J: np.ndarray,
+    beta: float,
+    rng: np.random.Generator,
+    *,
+    measure: bool = True,
+    measure_percolation: bool = True,
+) -> Optional[SweepResult]:
+    """Original array-based sweep, kept as the reference implementation.
+
+    :func:`sw_sweep` must reproduce this function exactly for the same random
+    generator state.  It does not report the two newer fields.
+
+    Perform one Swendsen-Wang update of ``spins`` in place.
 
     Satisfied bonds are activated with probability ``1 - exp(-2 beta)``, the
     active-bond graph is decomposed into clusters, and each cluster is flipped
