@@ -20,11 +20,21 @@ htmlcov/
 .vscode/
 .DS_Store
 
-# Bulk, regenerable output: disorder realizations, figures, pickles.
+# Bulk, regenerable output: disorder realizations, pickles.
 data/
 *.pkl
-*.png
-*.pdf
+
+# LaTeX build artefacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+# Figures and the derivation note are regenerable, but small and worth keeping,
+# so results/figures and docs are tracked; scratch images elsewhere are not.
+/*.png
+/*.pdf
 
 # Scan summaries under results/ are deliberately tracked.  They are aggregated
 # observables rather than configurations -- tens of kilobytes each -- so keeping
